@@ -7,13 +7,57 @@ async function getWorker(onProgress) {
   worker = await Tesseract.createWorker('jpn', 1, {
     logger: (m) => { if (onProgress) onProgress(m); },
   });
+  // 罫線だらけの帳票は既定の自動レイアウト推定(PSM.AUTO)だと表構造の誤認識で
+  // 崩れやすいため、順序を問わず文字塊を拾うSPARSE_TEXTに固定する。
+  await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT });
   return worker;
 }
 
 // スマホ写真はEXIFの回転情報が付いたまま渡すとTesseractが正しく解析できないため、
 // <img>で一度デコードしてcanvasに描き直す（モダンブラウザはこの過程でEXIF回転を
-// 反映してくれる）。あわせて巨大すぎる画像はOCRに適したサイズへ縮小する。
-const OCR_MAX_DIMENSION = 2000;
+// 反映してくれる）。あわせて、影・照明ムラの影響を減らすためグレースケール化＋
+// Otsu法による二値化（白黒はっきりさせる）を行い、巨大すぎる画像のみ縮小する。
+const OCR_MAX_DIMENSION = 3500;
+
+function otsuThreshold(gray) {
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+  const total = gray.length;
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0;
+  let wB = 0;
+  let varMax = 0;
+  let threshold = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    const wF = total - wB;
+    if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const varBetween = wB * wF * (mB - mF) * (mB - mF);
+    if (varBetween > varMax) { varMax = varBetween; threshold = t; }
+  }
+  return threshold;
+}
+
+function binarizeInPlace(ctx, w, h) {
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const d = imgData.data;
+  const gray = new Uint8ClampedArray(w * h);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    gray[p] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  }
+  const threshold = otsuThreshold(gray);
+  for (let p = 0; p < gray.length; p++) {
+    const v = gray[p] < threshold ? 0 : 255;
+    const idx = p * 4;
+    d[idx] = v; d[idx + 1] = v; d[idx + 2] = v;
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
 
 async function preprocessForOcr(fileOrBlob) {
   const url = URL.createObjectURL(fileOrBlob);
@@ -34,10 +78,12 @@ async function preprocessForOcr(fileOrBlob) {
     const canvas = document.createElement('canvas');
     canvas.width = outW;
     canvas.height = outH;
-    canvas.getContext('2d').drawImage(img, 0, 0, outW, outH);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, outW, outH);
+    binarizeInPlace(ctx, outW, outH);
 
     return await new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('画像の変換に失敗しました。'))), 'image/jpeg', 0.92);
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('画像の変換に失敗しました。'))), 'image/png');
     });
   } finally {
     URL.revokeObjectURL(url);
