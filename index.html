@@ -48,11 +48,13 @@
       </div>
       <form id="entryForm">
         <label>医療を受けた人
-          <input type="text" id="fPatient" list="patientNames" required maxlength="10">
-          <datalist id="patientNames"></datalist>
+          <select id="fPatient" required>
+            <option value="">選択してください</option>
+          </select>
         </label>
         <label>病院・薬局などの名称
-          <input type="text" id="fFacility" required maxlength="20">
+          <input type="text" id="fFacility" list="facilityNames" required maxlength="20">
+          <datalist id="facilityNames"></datalist>
         </label>
         <fieldset class="category-group">
           <legend>医療費の区分（複数選択可）</legend>
@@ -133,6 +135,22 @@
     <label class="checkbox-row">
       <input type="checkbox" id="autoUploadToggle"> 登録時に領収書画像を自動でDriveへアップロードする
     </label>
+    <hr>
+    <h3>医療を受けた人（登録リスト）</h3>
+    <p class="hint">ここで登録した人が「医療を受けた人」のプルダウンに表示されます。OCRで読み取った氏名に近い人が自動選択されます。</p>
+    <div class="registry-add-row">
+      <input type="text" id="newPatientRegistryInput" placeholder="例: 永田隼都" maxlength="10">
+      <button id="addPatientRegistryBtn" class="btn" type="button">追加</button>
+    </div>
+    <ul id="patientRegistryList" class="registry-list"></ul>
+    <hr>
+    <h3>医療機関（登録リスト）</h3>
+    <p class="hint">よく利用する病院・薬局を登録しておくと、名称欄の候補や自動選択に使われます。登録がない・一致しない場合は空欄になるので手入力してください。</p>
+    <div class="registry-add-row">
+      <input type="text" id="newFacilityRegistryInput" placeholder="例: 〇〇クリニック" maxlength="20">
+      <button id="addFacilityRegistryBtn" class="btn" type="button">追加</button>
+    </div>
+    <ul id="facilityRegistryList" class="registry-list"></ul>
     <div class="form-actions">
       <button id="closeSettingsBtn" class="btn btn-ghost" type="button">閉じる</button>
     </div>

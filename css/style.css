@@ -90,11 +90,13 @@ main {
 #entryForm { display: flex; flex-direction: column; gap: 12px; }
 #entryForm label { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
 #entryForm input[type="text"],
-#entryForm input[type="number"] {
+#entryForm input[type="number"],
+#entryForm select {
   padding: 10px;
   font-size: 1rem;
   border-radius: 6px;
   border: 1px solid var(--border);
+  background: #fff;
 }
 .category-group {
   border: 1px solid var(--border);
@@ -147,6 +149,17 @@ td.num { text-align: right; }
 .modal-box input[type="text"] { padding: 8px; border-radius: 6px; border: 1px solid var(--border); }
 .folder-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .checkbox-row { flex-direction: row !important; align-items: center; gap: 8px !important; }
+
+.registry-add-row { display: flex; gap: 8px; }
+.registry-add-row input[type="text"] { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border); }
+.registry-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.registry-list li {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; background: var(--bg); border-radius: 6px; font-size: 0.9rem;
+}
+.registry-list button {
+  border: none; background: none; color: var(--danger); cursor: pointer; font-size: 0.85rem; padding: 2px 6px;
+}
 
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);

@@ -175,24 +175,112 @@
     }
   });
 
-  // ---------- 患者名の候補 ----------
-  async function addPatientNameSuggestion(name) {
-    if (!name) return;
-    let list = (await AppDB.kvGet('patientNames')) || [];
-    if (!list.includes(name)) {
-      list.push(name);
-      await AppDB.kvSet('patientNames', list);
-      renderPatientNames(list);
+  // ---------- 登録リスト（医療を受けた人 / 医療機関）と、OCR結果とのあいまい一致 ----------
+  let patientRegistry = [];
+  let facilityRegistry = [];
+
+  // 編集距離(レーベンシュタイン距離)ベースの簡易な文字列類似度。
+  // OCRは氏名の一部だけ("永田隼都"→"永田")しか拾えないことが多いため、
+  // 一方が他方を包含する場合は高いスコアを与える。
+  function levenshtein(a, b) {
+    const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+    for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        dp[i][j] = a[i - 1] === b[j - 1]
+          ? dp[i - 1][j - 1]
+          : 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
+      }
     }
+    return dp[a.length][b.length];
   }
 
-  function renderPatientNames(list) {
-    const dl = $('patientNames');
+  function nameSimilarity(a, b) {
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    if (a.includes(b) || b.includes(a)) {
+      const shorter = Math.min(a.length, b.length);
+      const longer = Math.max(a.length, b.length);
+      return 0.7 + 0.3 * (shorter / longer);
+    }
+    const maxLen = Math.max(a.length, b.length);
+    if (maxLen === 0) return 0;
+    return 1 - levenshtein(a, b) / maxLen;
+  }
+
+  // 登録リストの中から最も近い候補を返す。上位2件の差が僅かで紛らわしい場合
+  // (例: 「永田」だけでは家族内の誰か判別できない)は、誤選択を避けるため
+  // あえて自動選択しない。
+  function findBestMatch(query, registry, threshold = 0.5) {
+    if (!query || !registry || !registry.length) return null;
+    const scored = registry
+      .map((name) => ({ name, score: nameSimilarity(query, name) }))
+      .sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    if (!best || best.score < threshold) return null;
+    const second = scored[1];
+    if (second && best.score < 1 && best.score - second.score < 0.05) return null;
+    return best.name;
+  }
+
+  async function loadRegistries() {
+    patientRegistry = (await AppDB.kvGet('patientRegistry')) || [];
+    facilityRegistry = (await AppDB.kvGet('facilityRegistry')) || [];
+  }
+
+  function renderPatientSelect(selectedValue) {
+    const sel = $('fPatient');
+    sel.innerHTML = '<option value="">選択してください</option>';
+    patientRegistry.forEach((n) => {
+      const opt = document.createElement('option');
+      opt.value = n;
+      opt.textContent = n;
+      sel.appendChild(opt);
+    });
+    sel.value = patientRegistry.includes(selectedValue) ? selectedValue : '';
+  }
+
+  function renderFacilityDatalist() {
+    const dl = $('facilityNames');
     dl.innerHTML = '';
-    list.forEach((n) => {
+    facilityRegistry.forEach((n) => {
       const opt = document.createElement('option');
       opt.value = n;
       dl.appendChild(opt);
+    });
+  }
+
+  function renderRegistryList(listEl, registry, onDelete) {
+    listEl.innerHTML = '';
+    registry.forEach((name) => {
+      const li = document.createElement('li');
+      const span = document.createElement('span');
+      span.textContent = name;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = '削除';
+      btn.addEventListener('click', () => onDelete(name));
+      li.appendChild(span);
+      li.appendChild(btn);
+      listEl.appendChild(li);
+    });
+  }
+
+  function renderPatientRegistryUI() {
+    renderRegistryList($('patientRegistryList'), patientRegistry, async (name) => {
+      patientRegistry = patientRegistry.filter((n) => n !== name);
+      await AppDB.kvSet('patientRegistry', patientRegistry);
+      renderPatientRegistryUI();
+      renderPatientSelect($('fPatient').value);
+    });
+  }
+
+  function renderFacilityRegistryUI() {
+    renderRegistryList($('facilityRegistryList'), facilityRegistry, async (name) => {
+      facilityRegistry = facilityRegistry.filter((n) => n !== name);
+      await AppDB.kvSet('facilityRegistry', facilityRegistry);
+      renderFacilityRegistryUI();
+      renderFacilityDatalist();
     });
   }
 
@@ -235,10 +323,17 @@
         }
       });
       const parsed = OCR.parseReceiptText(text);
+      // 「医療を受けた人」は登録リストからのプルダウン選択に一本化するため、
+      // OCR結果は登録済みの名前と近ければ自動選択し、なければ未選択のままにする。
+      const matchedPatient = findBestMatch(parsed.patientName, patientRegistry) || '';
+      // 「病院・薬局などの名称」も登録リストと近ければその正式名称を採用し、
+      // 一致しない場合は生のOCR結果ではなく空欄にして手入力を促す。
+      const matchedFacility = findBestMatch(parsed.facility, facilityRegistry) || '';
+      const category = matchedFacility ? OCR.guessCategory(matchedFacility) : parsed.category;
       openEditForm({
-        patientName: parsed.patientName,
-        facility: parsed.facility,
-        category: parsed.category,
+        patientName: matchedPatient,
+        facility: matchedFacility,
+        category,
         amount: parsed.amount,
         reimbursed: '',
         date: parsed.date,
@@ -257,7 +352,7 @@
     editingId = entry.id || null;
     activeFile = file || null;
 
-    $('fPatient').value = entry.patientName || '';
+    renderPatientSelect(entry.patientName || '');
     $('fFacility').value = entry.facility || '';
     const cat = entry.category || {};
     $('fCatShinryo').checked = !!cat.shinryo;
@@ -322,7 +417,6 @@
       entries.push(entryData);
     }
 
-    await addPatientNameSuggestion(entryData.patientName);
     renderTable();
     await rebuildBlob();
 
@@ -392,6 +486,8 @@
     $('gcpApiKey').value = s.apiKey;
     $('folderNameLabel').textContent = s.folderName || '未選択';
     $('autoUploadToggle').checked = s.autoUpload;
+    renderPatientRegistryUI();
+    renderFacilityRegistryUI();
     $('settingsModal').hidden = false;
   });
   $('closeSettingsBtn').addEventListener('click', () => { $('settingsModal').hidden = true; });
@@ -411,6 +507,29 @@
     DriveApp.setAutoUpload(ev.target.checked);
   });
 
+  async function addRegistryEntry(inputEl, registry, key, render) {
+    const name = inputEl.value.trim();
+    if (!name) return;
+    if (registry.includes(name)) { toast('すでに登録されています。'); return; }
+    registry.push(name);
+    await AppDB.kvSet(key, registry);
+    inputEl.value = '';
+    render();
+  }
+
+  $('addPatientRegistryBtn').addEventListener('click', async () => {
+    await addRegistryEntry($('newPatientRegistryInput'), patientRegistry, 'patientRegistry', () => {
+      renderPatientRegistryUI();
+      renderPatientSelect($('fPatient').value);
+    });
+  });
+  $('addFacilityRegistryBtn').addEventListener('click', async () => {
+    await addRegistryEntry($('newFacilityRegistryInput'), facilityRegistry, 'facilityRegistry', () => {
+      renderFacilityRegistryUI();
+      renderFacilityDatalist();
+    });
+  });
+
   // ---------- 初期化 ----------
   (async function init() {
     try {
@@ -418,8 +537,9 @@
     } catch (e) {
       toast(e.message, true);
     }
-    const names = (await AppDB.kvGet('patientNames')) || [];
-    renderPatientNames(names);
+    await loadRegistries();
+    renderPatientSelect('');
+    renderFacilityDatalist();
     await renderYearSelect();
     await switchYear(currentYear);
   })();

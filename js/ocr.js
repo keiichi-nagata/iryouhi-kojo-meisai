@@ -218,4 +218,4 @@ function parseReceiptText(text) {
   };
 }
 
-window.OCR = { recognizeImage, parseReceiptText };
+window.OCR = { recognizeImage, parseReceiptText, guessCategory };
