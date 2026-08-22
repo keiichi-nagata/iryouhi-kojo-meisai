@@ -10,9 +10,44 @@ async function getWorker(onProgress) {
   return worker;
 }
 
+// スマホ写真はEXIFの回転情報が付いたまま渡すとTesseractが正しく解析できないため、
+// <img>で一度デコードしてcanvasに描き直す（モダンブラウザはこの過程でEXIF回転を
+// 反映してくれる）。あわせて巨大すぎる画像はOCRに適したサイズへ縮小する。
+const OCR_MAX_DIMENSION = 2000;
+
+async function preprocessForOcr(fileOrBlob) {
+  const url = URL.createObjectURL(fileOrBlob);
+  try {
+    const img = new Image();
+    img.src = url;
+    await new Promise((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('画像の読み込みに失敗しました。'));
+    });
+
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    const scale = Math.min(1, OCR_MAX_DIMENSION / Math.max(w, h));
+    const outW = Math.max(1, Math.round(w * scale));
+    const outH = Math.max(1, Math.round(h * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = outW;
+    canvas.height = outH;
+    canvas.getContext('2d').drawImage(img, 0, 0, outW, outH);
+
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('画像の変換に失敗しました。'))), 'image/jpeg', 0.92);
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 async function recognizeImage(fileOrBlob, onProgress) {
   const w = await getWorker(onProgress);
-  const { data } = await w.recognize(fileOrBlob);
+  const processed = await preprocessForOcr(fileOrBlob);
+  const { data } = await w.recognize(processed);
   return data.text || '';
 }
 
