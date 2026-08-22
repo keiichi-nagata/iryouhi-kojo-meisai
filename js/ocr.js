@@ -59,7 +59,7 @@ function binarizeInPlace(ctx, w, h) {
   ctx.putImageData(imgData, 0, 0);
 }
 
-async function preprocessForOcr(fileOrBlob) {
+async function buildBaseCanvas(fileOrBlob) {
   const url = URL.createObjectURL(fileOrBlob);
   try {
     const img = new Image();
@@ -81,20 +81,69 @@ async function preprocessForOcr(fileOrBlob) {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0, outW, outH);
     binarizeInPlace(ctx, outW, outH);
-
-    return await new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('画像の変換に失敗しました。'))), 'image/png');
-    });
+    return canvas;
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
+// スマホは書類を横向きに構図を取って撮影することが多く、その場合は文書内の文字が
+// 90度単位で傾いたまま写り込む（EXIF補正だけでは直らない）。0/90/180/270度の
+// 4パターンで認識を試し、最も信頼度(confidence)が高かった結果を採用する。
+function rotateCanvas(srcCanvas, degrees) {
+  if (degrees === 0) return srcCanvas;
+  const swapped = degrees === 90 || degrees === 270;
+  const out = document.createElement('canvas');
+  out.width = swapped ? srcCanvas.height : srcCanvas.width;
+  out.height = swapped ? srcCanvas.width : srcCanvas.height;
+  const ctx = out.getContext('2d');
+  ctx.save();
+  if (degrees === 90) {
+    ctx.translate(out.width, 0);
+    ctx.rotate(Math.PI / 2);
+  } else if (degrees === 180) {
+    ctx.translate(out.width, out.height);
+    ctx.rotate(Math.PI);
+  } else if (degrees === 270) {
+    ctx.translate(0, out.height);
+    ctx.rotate(-Math.PI / 2);
+  }
+  ctx.drawImage(srcCanvas, 0, 0);
+  ctx.restore();
+  return out;
+}
+
+function canvasToPngBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('画像の変換に失敗しました。'))), 'image/png');
+  });
+}
+
 async function recognizeImage(fileOrBlob, onProgress) {
   const w = await getWorker(onProgress);
-  const processed = await preprocessForOcr(fileOrBlob);
-  const { data } = await w.recognize(processed);
-  return data.text || '';
+  const base = await buildBaseCanvas(fileOrBlob);
+
+  const angles = [0, 90, 180, 270];
+  let best = null;
+  for (let i = 0; i < angles.length; i++) {
+    const angle = angles[i];
+    if (onProgress) {
+      onProgress({ status: `向きを判定中 (${i + 1}/${angles.length})`, progress: i / angles.length });
+    }
+    const rotated = rotateCanvas(base, angle);
+    const blob = await canvasToPngBlob(rotated);
+    const { data } = await w.recognize(blob);
+    const text = data.text || '';
+    // Tesseractのconfidenceは向き違いの誤読でも高い値が付くことがあり信頼できないため、
+    // 「まともに文字が認識できた量」＝空白除去後の文字数を主指標にする
+    // （正しい向きほど連続した文字列として認識され、誤った向きは断片的にしか拾えない傾向がある）。
+    const textLen = text.replace(/\s/g, '').length;
+    const confidence = typeof data.confidence === 'number' ? data.confidence : 0;
+    if (!best || textLen > best.textLen || (textLen === best.textLen && confidence > best.confidence)) {
+      best = { textLen, confidence, text };
+    }
+  }
+  return best ? best.text : '';
 }
 
 const ERA_START = { '令和': 2018, '平成': 1988, '昭和': 1925 };
