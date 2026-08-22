@@ -195,13 +195,20 @@ function extractAmount(text) {
   return '';
 }
 
+// Tesseractは日本語の文字間に余分な空白を挿入することが多いため、
+// 和文字どうしに挟まれた空白だけを取り除いて表示用に整形する
+// （英数字と和文字の間の空白は本来の区切りの可能性があるため残す）。
+function cleanJapaneseSpacing(str) {
+  return str.replace(/([぀-ヿ一-鿿])\s+(?=[぀-ヿ一-鿿])/g, '$1');
+}
+
 function extractFacility(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const keyRe = /(病院|医院|クリニック|薬局|歯科|接骨院|整骨院|診療所)/;
   for (const line of lines) {
-    if (keyRe.test(line.replace(/\s+/g, ''))) return line;
+    if (keyRe.test(line.replace(/\s+/g, ''))) return cleanJapaneseSpacing(line);
   }
-  return lines[0] || '';
+  return lines[0] ? cleanJapaneseSpacing(lines[0]) : '';
 }
 
 // 「氏名」欄のラベルの後ろ数行から患者名らしき文字列を探す。
