@@ -218,7 +218,11 @@ function extractFacility(text) {
 function extractPatientName(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const labelRe = /氏\s*名/;
-  const labelIdx = lines.findIndex((l) => labelRe.test(l));
+  // 「氏名」のうち「氏」がOCRで欠落し「名」だけの単独行として認識される
+  // ことがあるため、その場合もラベル行とみなす。
+  const looseLabelRe = /^名$/;
+  let labelIdx = lines.findIndex((l) => labelRe.test(l));
+  if (labelIdx === -1) labelIdx = lines.findIndex((l) => looseLabelRe.test(l));
   if (labelIdx === -1) return '';
 
   const candidates = [];
@@ -233,9 +237,13 @@ function extractPatientName(text) {
     // 患者番号と氏名が同一行に詰めて認識される場合があるため、先頭の数字列は除去する。
     const stripped = raw.replace(/\s+/g, '').replace(/^[0-9]+/, '');
     if (!stripped) continue;
-    if (/番号/.test(stripped)) continue; // 「患者番号」等の見出しの誤爆を除外
+    // 「患者番号」等の見出しがOCRで断片的に崩れた場合(例:「愚者番」)でも
+    // 除外できるよう、帳票の事務的な語に含まれがちな漢字を含む候補を除外する。
+    if (/[患者番号発行期間請求負担割合険]/.test(stripped)) continue;
     const nameOnly = stripped.replace(/様$/, '');
-    if (nameOnly.length < 2 || nameOnly.length > 12) continue;
+    // 日本人の氏名は通常2〜6文字程度で、数字を含まない。
+    if (nameOnly.length < 2 || nameOnly.length > 6) continue;
+    if (/[0-9]/.test(nameOnly)) continue;
     if (!/[぀-ヿ一-鿿]/.test(nameOnly)) continue;
     candidates.push(nameOnly);
   }
