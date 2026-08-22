@@ -1,60 +1,35 @@
 // Tesseract.js による領収書OCRと、金額・日付・医療機関名の抽出ヒューリスティック。
 // OCR結果はあくまで下書きであり、利用者が確認・修正してから登録する前提。
-let worker = null;
 
-async function getWorker(onProgress) {
-  if (worker) return worker;
-  worker = await Tesseract.createWorker('jpn', 1, {
+// 同一ワーカーを使い回してページ分割モード(PSM)を切り替えると、内部状態が
+// 引き継がれるためか認識結果が不安定になることを実機検証で確認した。
+// そのため認識1回ごとに使い捨てのワーカーを生成する（速度より精度を優先）。
+async function recognizeOnce(blob, psm, onProgress) {
+  const w = await Tesseract.createWorker('jpn', 1, {
     logger: (m) => { if (onProgress) onProgress(m); },
   });
-  // 罫線だらけの帳票は既定の自動レイアウト推定(PSM.AUTO)だと表構造の誤認識で
-  // 崩れやすいため、順序を問わず文字塊を拾うSPARSE_TEXTに固定する。
-  await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT });
-  return worker;
+  try {
+    await w.setParameters({ tessedit_pageseg_mode: psm });
+    const { data } = await w.recognize(blob);
+    return data;
+  } finally {
+    await w.terminate();
+  }
 }
 
 // スマホ写真はEXIFの回転情報が付いたまま渡すとTesseractが正しく解析できないため、
 // <img>で一度デコードしてcanvasに描き直す（モダンブラウザはこの過程でEXIF回転を
-// 反映してくれる）。あわせて、影・照明ムラの影響を減らすためグレースケール化＋
-// Otsu法による二値化（白黒はっきりさせる）を行い、巨大すぎる画像のみ縮小する。
+// 反映してくれる）。あわせてグレースケール化し、巨大すぎる画像のみ縮小する。
+// 二値化(白黒化)は行わない — 実機の照明ムラがある写真では単純な閾値処理が
+// 逆に文字を潰してしまうことを確認したため、Tesseract自身の内部処理に委ねる。
 const OCR_MAX_DIMENSION = 3500;
 
-function otsuThreshold(gray) {
-  const hist = new Array(256).fill(0);
-  for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
-  const total = gray.length;
-  let sum = 0;
-  for (let t = 0; t < 256; t++) sum += t * hist[t];
-  let sumB = 0;
-  let wB = 0;
-  let varMax = 0;
-  let threshold = 127;
-  for (let t = 0; t < 256; t++) {
-    wB += hist[t];
-    if (wB === 0) continue;
-    const wF = total - wB;
-    if (wF === 0) break;
-    sumB += t * hist[t];
-    const mB = sumB / wB;
-    const mF = (sum - sumB) / wF;
-    const varBetween = wB * wF * (mB - mF) * (mB - mF);
-    if (varBetween > varMax) { varMax = varBetween; threshold = t; }
-  }
-  return threshold;
-}
-
-function binarizeInPlace(ctx, w, h) {
+function grayscaleInPlace(ctx, w, h) {
   const imgData = ctx.getImageData(0, 0, w, h);
   const d = imgData.data;
-  const gray = new Uint8ClampedArray(w * h);
-  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
-    gray[p] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-  }
-  const threshold = otsuThreshold(gray);
-  for (let p = 0; p < gray.length; p++) {
-    const v = gray[p] < threshold ? 0 : 255;
-    const idx = p * 4;
-    d[idx] = v; d[idx + 1] = v; d[idx + 2] = v;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    d[i] = g; d[i + 1] = g; d[i + 2] = g;
   }
   ctx.putImageData(imgData, 0, 0);
 }
@@ -80,7 +55,7 @@ async function buildBaseCanvas(fileOrBlob) {
     canvas.height = outH;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0, outW, outH);
-    binarizeInPlace(ctx, outW, outH);
+    grayscaleInPlace(ctx, outW, outH);
     return canvas;
   } finally {
     URL.revokeObjectURL(url);
@@ -88,8 +63,7 @@ async function buildBaseCanvas(fileOrBlob) {
 }
 
 // スマホは書類を横向きに構図を取って撮影することが多く、その場合は文書内の文字が
-// 90度単位で傾いたまま写り込む（EXIF補正だけでは直らない）。0/90/180/270度の
-// 4パターンで認識を試し、最も信頼度(confidence)が高かった結果を採用する。
+// 90度単位で傾いたまま写り込む（EXIF補正だけでは直らない）。
 function rotateCanvas(srcCanvas, degrees) {
   if (degrees === 0) return srcCanvas;
   const swapped = degrees === 90 || degrees === 270;
@@ -119,39 +93,54 @@ function canvasToPngBlob(canvas) {
   });
 }
 
+// 向きの判定にはTesseract標準のOSD(向き・スクリプト検出)機能を使う。
+// 「認識できた文字数が多い向きを正解とみなす」方式も試したが、上下逆さま
+// (180度)の場合に正しい向きとほぼ同数の文字を拾ってしまい誤判定することが
+// 実機検証で判明したため、専用のOSD検出に置き換えた。
+async function detectOrientation(blob) {
+  const w = await Tesseract.createWorker('osd', 0, {});
+  try {
+    const { data } = await w.detect(blob);
+    const degrees = data && typeof data.orientation_degrees === 'number' ? data.orientation_degrees : 0;
+    // OSDが返すのは0/90/180/270のいずれか。想定外の値が来た場合は補正しない。
+    return [0, 90, 180, 270].includes(degrees) ? degrees : 0;
+  } catch (e) {
+    return 0;
+  } finally {
+    await w.terminate();
+  }
+}
+
 async function recognizeImage(fileOrBlob, onProgress) {
-  const w = await getWorker(onProgress);
   const base = await buildBaseCanvas(fileOrBlob);
 
-  const angles = [0, 90, 180, 270];
-  let best = null;
-  for (let i = 0; i < angles.length; i++) {
-    const angle = angles[i];
-    if (onProgress) {
-      onProgress({ status: `向きを判定中 (${i + 1}/${angles.length})`, progress: i / angles.length });
-    }
-    const rotated = rotateCanvas(base, angle);
-    const blob = await canvasToPngBlob(rotated);
-    const { data } = await w.recognize(blob);
-    const text = data.text || '';
-    // Tesseractのconfidenceは向き違いの誤読でも高い値が付くことがあり信頼できないため、
-    // 「まともに文字が認識できた量」＝空白除去後の文字数を主指標にする
-    // （正しい向きほど連続した文字列として認識され、誤った向きは断片的にしか拾えない傾向がある）。
-    const textLen = text.replace(/\s/g, '').length;
-    const confidence = typeof data.confidence === 'number' ? data.confidence : 0;
-    if (!best || textLen > best.textLen || (textLen === best.textLen && confidence > best.confidence)) {
-      best = { textLen, confidence, text };
-    }
-  }
-  return best ? best.text : '';
+  if (onProgress) onProgress({ status: '向きを判定中', progress: 0 });
+  const baseBlob = await canvasToPngBlob(base);
+  const correctionDegrees = await detectOrientation(baseBlob);
+  const corrected = rotateCanvas(base, correctionDegrees);
+  const blob = correctionDegrees === 0 ? baseBlob : await canvasToPngBlob(corrected);
+
+  // 罫線で囲まれた表組みは、標準の自動レイアウト推定(AUTO)だと内容を丸ごと
+  // 読み飛ばすことがある一方、まばらな文字を拾うSPARSE_TEXTだと逆に単純な
+  // 文章を見落とすことがある。両方の結果を合成し、どちらか一方でも拾えた
+  // 内容を後段の金額・日付抽出に渡せるようにする。
+  if (onProgress) onProgress({ status: '文字を認識中 (1/2)', progress: 0.3 });
+  const autoData = await recognizeOnce(blob, Tesseract.PSM.AUTO, onProgress);
+  if (onProgress) onProgress({ status: '文字を認識中 (2/2)', progress: 0.65 });
+  const sparseData = await recognizeOnce(blob, Tesseract.PSM.SPARSE_TEXT, onProgress);
+
+  if (onProgress) onProgress({ status: '文字を認識中', progress: 1 });
+  return `${autoData.text || ''}\n${sparseData.text || ''}`;
 }
 
 const ERA_START = { '令和': 2018, '平成': 1988, '昭和': 1925 };
 
 function extractDate(text) {
-  let m = text.match(/(令和|平成|昭和)\s*(元|\d{1,2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+  // OCRは「令和」等の熟語の間にも余分な空白を挿入することがあるため、
+  // 元号の文字間にも\s*を許容する。
+  let m = text.match(/(令\s*和|平\s*成|昭\s*和)\s*(元|\d{1,2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
   if (m) {
-    const era = m[1];
+    const era = m[1].replace(/\s+/g, '');
     const yNum = m[2] === '元' ? 1 : parseInt(m[2], 10);
     const year = ERA_START[era] + yNum - 1;
     return `${year}/${String(m[3]).padStart(2, '0')}/${String(m[4]).padStart(2, '0')}`;
@@ -163,17 +152,39 @@ function extractDate(text) {
   return '';
 }
 
+function numbersInLine(line) {
+  return [...line.matchAll(/[¥￥]?\s*([0-9][0-9,]{2,})\s*円?/g)]
+    .map((x) => parseInt(x[1].replace(/,/g, ''), 10));
+}
+
+// 医療費控除の対象は「実際に支払った金額」であり、保険点数等を含む「合計」欄とは
+// 異なる場合がある（例: 合計550点・領収金額500円のように、合計の方が大きい数字に
+// なる帳票がある）。そのため、実際の支払額を表すキーワードを優先的に探す。
+// OCRでは項目名と数値が別の行に分かれて認識されることが多いため、キーワードの
+// 行だけでなく次の行も合わせて探索する。
+const AMOUNT_KEYWORD_TIERS = [
+  /(領収金額|負担額|自己負担|お支払|お会計)/,
+  /(請求金額|ご請求)/,
+  /(合計|総合計|小計)/,
+];
+
 function extractAmount(text) {
-  const lines = text.split(/\r?\n/);
-  const keyLineRe = /(合計|ご請求|請求金額|お会計|領収金額|総合計|お支払|小計)/;
-  const candidates = [];
-  for (const line of lines) {
-    if (!keyLineRe.test(line)) continue;
-    const nums = [...line.matchAll(/[¥￥]?\s*([0-9][0-9,]{2,})\s*円?/g)]
-      .map((x) => parseInt(x[1].replace(/,/g, ''), 10));
-    candidates.push(...nums);
+  // Tesseractは日本語の文字間に余分な空白を挿入することが多く、
+  // 「領収金額」が「領収 金額」のように分かれて認識されるため、
+  // キーワード判定は空白を除去した文字列に対して行う。
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/\s+/g, '')).filter(Boolean);
+
+  for (const keyRe of AMOUNT_KEYWORD_TIERS) {
+    const candidates = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (!keyRe.test(lines[i])) continue;
+      let nums = numbersInLine(lines[i]);
+      if (!nums.length && i + 1 < lines.length) nums = numbersInLine(lines[i + 1]);
+      candidates.push(...nums);
+    }
+    if (candidates.length) return Math.max(...candidates);
   }
-  if (candidates.length) return Math.max(...candidates);
+
   const allNums = [...text.matchAll(/([0-9][0-9,]{2,})/g)]
     .map((x) => parseInt(x[1].replace(/,/g, ''), 10))
     .filter((n) => n >= 100 && n <= 2000000);
@@ -184,16 +195,17 @@ function extractAmount(text) {
 function extractFacility(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const keyRe = /(病院|医院|クリニック|薬局|歯科|接骨院|整骨院|診療所)/;
-  for (const line of lines.slice(0, 8)) {
-    if (keyRe.test(line)) return line;
+  for (const line of lines) {
+    if (keyRe.test(line.replace(/\s+/g, ''))) return line;
   }
   return lines[0] || '';
 }
 
 function guessCategory(facility) {
-  if (/薬局/.test(facility)) return { shinryo: false, iyaku: true, kaigo: false, sonota: false };
-  if (/介護/.test(facility)) return { shinryo: false, iyaku: false, kaigo: true, sonota: false };
-  if (/(病院|医院|クリニック|歯科|接骨院|整骨院|診療所)/.test(facility)) {
+  const compact = (facility || '').replace(/\s+/g, '');
+  if (/薬局/.test(compact)) return { shinryo: false, iyaku: true, kaigo: false, sonota: false };
+  if (/介護/.test(compact)) return { shinryo: false, iyaku: false, kaigo: true, sonota: false };
+  if (/(病院|医院|クリニック|歯科|接骨院|整骨院|診療所)/.test(compact)) {
     return { shinryo: true, iyaku: false, kaigo: false, sonota: false };
   }
   return { shinryo: false, iyaku: false, kaigo: false, sonota: true };
