@@ -51,6 +51,27 @@ function findCell(doc, colLetter, row) {
   return doc.querySelector(`c[r="${colLetter}${row}"]`);
 }
 
+// C3/C4は「支払った医療費の金額」「左のうち、補填される金額」の合計を
+// IF(0=SUM(...),"",SUM(...))という数式で表示するセル。生成した直後は
+// Excel等が開いて再計算するまで数式のキャッシュ値(<v>)が更新されず、
+// テンプレート本来の空欄のままになってしまうため、ここで実際の合計値を
+// 計算してキャッシュ値に直接書き込む（<f>の数式自体はそのまま残す）。
+function setFormulaCachedNumberOrEmpty(doc, cellEl, num) {
+  if (!cellEl) return;
+  let v = cellEl.querySelector('v');
+  if (!v) {
+    v = doc.createElementNS(XLSX_NS, 'v');
+    cellEl.appendChild(v);
+  }
+  if (!num) {
+    cellEl.setAttribute('t', 'str');
+    v.textContent = '';
+  } else {
+    cellEl.removeAttribute('t');
+    v.textContent = String(num);
+  }
+}
+
 async function loadTemplateZip(arrayBuffer) {
   return JSZip.loadAsync(arrayBuffer);
 }
@@ -105,8 +126,29 @@ async function buildWorkbookBlob(templateArrayBuffer, entries) {
     setCellText(doc, findCell(doc, COLS.date, row), entry.date || '');
   });
 
+  const sumAmount = entries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const sumReimbursed = entries.reduce((s, e) => s + (Number(e.reimbursed) || 0), 0);
+  setFormulaCachedNumberOrEmpty(doc, findCell(doc, 'C', 3), sumAmount);
+  setFormulaCachedNumberOrEmpty(doc, findCell(doc, 'C', 4), sumReimbursed);
+
   const serialized = new XMLSerializer().serializeToString(doc);
   zip.file(SHEET_PATH, serialized);
+
+  // 念のため、開いたアプリ側で全数式を再計算させるフラグも立てておく
+  // (アプリによってはキャッシュ値をそのまま信頼することがあるため)。
+  const workbookFile = zip.file('xl/workbook.xml');
+  if (workbookFile) {
+    let workbookXml = await workbookFile.async('string');
+    if (/<calcPr\b[^/]*\/>/.test(workbookXml)) {
+      workbookXml = workbookXml.replace(/<calcPr\b([^/]*)\/>/, (m, attrs) => (
+        /fullCalcOnLoad=/.test(attrs)
+          ? m.replace(/fullCalcOnLoad="[^"]*"/, 'fullCalcOnLoad="1"')
+          : `<calcPr${attrs} fullCalcOnLoad="1"/>`
+      ));
+      zip.file('xl/workbook.xml', workbookXml);
+    }
+  }
+
   return zip.generateAsync({
     type: 'blob',
     mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
