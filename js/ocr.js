@@ -142,7 +142,7 @@ function extractDate(text) {
   if (m) {
     const era = m[1].replace(/\s+/g, '');
     const yNum = m[2] === '元' ? 1 : parseInt(m[2], 10);
-    const year = ERA_START[era] + yNum - 1;
+    const year = ERA_START[era] + yNum;
     return `${year}/${String(m[3]).padStart(2, '0')}/${String(m[4]).padStart(2, '0')}`;
   }
   m = text.match(/(20\d{2}|19\d{2})[\/\-年](\d{1,2})[\/\-月](\d{1,2})\s*日?/);
@@ -185,7 +185,14 @@ function extractAmount(text) {
     if (candidates.length) return Math.max(...candidates);
   }
 
-  const allNums = [...text.matchAll(/([0-9][0-9,]{2,})/g)]
+  // 電話番号(TEL 06-6626-3745 等)の一部を金額と誤認識しないよう、
+  // 電話番号らしき行・ハイフン区切りの数字列は候補から除外する。
+  const textWithoutPhoneNumbers = text
+    .split(/\r?\n/)
+    .filter((line) => !/TEL|電話/i.test(line))
+    .join('\n')
+    .replace(/\d{1,4}-\d{2,4}-\d{4}/g, '');
+  const allNums = [...textWithoutPhoneNumbers.matchAll(/([0-9][0-9,]{2,})/g)]
     .map((x) => parseInt(x[1].replace(/,/g, ''), 10))
     .filter((n) => n >= 100 && n <= 2000000);
   if (allNums.length) return Math.max(...allNums);
