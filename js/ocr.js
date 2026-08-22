@@ -1,40 +1,14 @@
-// Tesseract.js による領収書OCRと、金額・日付・医療機関名の抽出ヒューリスティック。
+// Google Cloud Vision API (DOCUMENT_TEXT_DETECTION) による領収書OCRと、
+// 金額・日付・医療機関名・患者名の抽出ヒューリスティック。
 // OCR結果はあくまで下書きであり、利用者が確認・修正してから登録する前提。
+//
+// ブラウザ内OCR(Tesseract.js)は罫線の多い帳票では文字化けが激しく実用に
+// 耐えなかったため、クラウドのVision APIに切り替えた。Vision API自体が
+// 画像の回転・EXIF補正を内部で行うため、独自の向き判定・二値化処理は不要。
 
-// 同一ワーカーを使い回してページ分割モード(PSM)を切り替えると、内部状態が
-// 引き継がれるためか認識結果が不安定になることを実機検証で確認した。
-// そのため認識1回ごとに使い捨てのワーカーを生成する（速度より精度を優先）。
-async function recognizeOnce(blob, psm, onProgress) {
-  const w = await Tesseract.createWorker('jpn', 1, {
-    logger: (m) => { if (onProgress) onProgress(m); },
-  });
-  try {
-    await w.setParameters({ tessedit_pageseg_mode: psm });
-    const { data } = await w.recognize(blob);
-    return data;
-  } finally {
-    await w.terminate();
-  }
-}
+const OCR_MAX_DIMENSION = 2500;
 
-// スマホ写真はEXIFの回転情報が付いたまま渡すとTesseractが正しく解析できないため、
-// <img>で一度デコードしてcanvasに描き直す（モダンブラウザはこの過程でEXIF回転を
-// 反映してくれる）。あわせてグレースケール化し、巨大すぎる画像のみ縮小する。
-// 二値化(白黒化)は行わない — 実機の照明ムラがある写真では単純な閾値処理が
-// 逆に文字を潰してしまうことを確認したため、Tesseract自身の内部処理に委ねる。
-const OCR_MAX_DIMENSION = 3500;
-
-function grayscaleInPlace(ctx, w, h) {
-  const imgData = ctx.getImageData(0, 0, w, h);
-  const d = imgData.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-    d[i] = g; d[i + 1] = g; d[i + 2] = g;
-  }
-  ctx.putImageData(imgData, 0, 0);
-}
-
-async function buildBaseCanvas(fileOrBlob) {
+async function buildResizedCanvas(fileOrBlob) {
   const url = URL.createObjectURL(fileOrBlob);
   try {
     const img = new Image();
@@ -53,84 +27,54 @@ async function buildBaseCanvas(fileOrBlob) {
     const canvas = document.createElement('canvas');
     canvas.width = outW;
     canvas.height = outH;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0, outW, outH);
-    grayscaleInPlace(ctx, outW, outH);
+    canvas.getContext('2d').drawImage(img, 0, 0, outW, outH);
     return canvas;
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
-// スマホは書類を横向きに構図を取って撮影することが多く、その場合は文書内の文字が
-// 90度単位で傾いたまま写り込む（EXIF補正だけでは直らない）。
-function rotateCanvas(srcCanvas, degrees) {
-  if (degrees === 0) return srcCanvas;
-  const swapped = degrees === 90 || degrees === 270;
-  const out = document.createElement('canvas');
-  out.width = swapped ? srcCanvas.height : srcCanvas.width;
-  out.height = swapped ? srcCanvas.width : srcCanvas.height;
-  const ctx = out.getContext('2d');
-  ctx.save();
-  if (degrees === 90) {
-    ctx.translate(out.width, 0);
-    ctx.rotate(Math.PI / 2);
-  } else if (degrees === 180) {
-    ctx.translate(out.width, out.height);
-    ctx.rotate(Math.PI);
-  } else if (degrees === 270) {
-    ctx.translate(0, out.height);
-    ctx.rotate(-Math.PI / 2);
-  }
-  ctx.drawImage(srcCanvas, 0, 0);
-  ctx.restore();
-  return out;
+function canvasToBase64Jpeg(canvas) {
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+  return dataUrl.slice(dataUrl.indexOf(',') + 1);
 }
 
-function canvasToPngBlob(canvas) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('画像の変換に失敗しました。'))), 'image/png');
+async function callVisionApi(base64Content, apiKey) {
+  const res = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      requests: [{
+        image: { content: base64Content },
+        features: [{ type: 'DOCUMENT_TEXT_DETECTION' }],
+        imageContext: { languageHints: ['ja'] },
+      }],
+    }),
   });
-}
-
-// 向きの判定にはTesseract標準のOSD(向き・スクリプト検出)機能を使う。
-// 「認識できた文字数が多い向きを正解とみなす」方式も試したが、上下逆さま
-// (180度)の場合に正しい向きとほぼ同数の文字を拾ってしまい誤判定することが
-// 実機検証で判明したため、専用のOSD検出に置き換えた。
-async function detectOrientation(blob) {
-  const w = await Tesseract.createWorker('osd', 0, {});
-  try {
-    const { data } = await w.detect(blob);
-    const degrees = data && typeof data.orientation_degrees === 'number' ? data.orientation_degrees : 0;
-    // OSDが返すのは0/90/180/270のいずれか。想定外の値が来た場合は補正しない。
-    return [0, 90, 180, 270].includes(degrees) ? degrees : 0;
-  } catch (e) {
-    return 0;
-  } finally {
-    await w.terminate();
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    const message = (json && json.error && json.error.message) || `HTTP ${res.status}`;
+    throw new Error(`Vision APIの呼び出しに失敗しました: ${message}`);
   }
+  const result = json && json.responses && json.responses[0];
+  if (result && result.error) {
+    throw new Error(`Vision APIエラー: ${result.error.message}`);
+  }
+  return (result && result.fullTextAnnotation && result.fullTextAnnotation.text) || '';
 }
 
-async function recognizeImage(fileOrBlob, onProgress) {
-  const base = await buildBaseCanvas(fileOrBlob);
+async function recognizeImage(fileOrBlob, apiKey, onProgress) {
+  if (!apiKey) {
+    throw new Error('Google CloudのAPIキーが設定されていません。設定画面から入力してください。');
+  }
+  if (onProgress) onProgress({ status: '画像を準備中', progress: 0 });
+  const canvas = await buildResizedCanvas(fileOrBlob);
+  const base64 = canvasToBase64Jpeg(canvas);
 
-  if (onProgress) onProgress({ status: '向きを判定中', progress: 0 });
-  const baseBlob = await canvasToPngBlob(base);
-  const correctionDegrees = await detectOrientation(baseBlob);
-  const corrected = rotateCanvas(base, correctionDegrees);
-  const blob = correctionDegrees === 0 ? baseBlob : await canvasToPngBlob(corrected);
-
-  // 罫線で囲まれた表組みは、標準の自動レイアウト推定(AUTO)だと内容を丸ごと
-  // 読み飛ばすことがある一方、まばらな文字を拾うSPARSE_TEXTだと逆に単純な
-  // 文章を見落とすことがある。両方の結果を合成し、どちらか一方でも拾えた
-  // 内容を後段の金額・日付抽出に渡せるようにする。
-  if (onProgress) onProgress({ status: '文字を認識中 (1/2)', progress: 0.3 });
-  const autoData = await recognizeOnce(blob, Tesseract.PSM.AUTO, onProgress);
-  if (onProgress) onProgress({ status: '文字を認識中 (2/2)', progress: 0.65 });
-  const sparseData = await recognizeOnce(blob, Tesseract.PSM.SPARSE_TEXT, onProgress);
-
-  if (onProgress) onProgress({ status: '文字を認識中', progress: 1 });
-  return `${autoData.text || ''}\n${sparseData.text || ''}`;
+  if (onProgress) onProgress({ status: 'クラウドで文字を認識中', progress: 0.4 });
+  const text = await callVisionApi(base64, apiKey);
+  if (onProgress) onProgress({ status: '完了', progress: 1 });
+  return text;
 }
 
 const ERA_START = { '令和': 2018, '平成': 1988, '昭和': 1925 };

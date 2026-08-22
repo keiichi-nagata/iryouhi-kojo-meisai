@@ -228,7 +228,8 @@
 
     const previewUrl = URL.createObjectURL(item.file);
     try {
-      const text = await OCR.recognizeImage(item.file, (m) => {
+      const apiKey = DriveApp.getSettings().apiKey;
+      const text = await OCR.recognizeImage(item.file, apiKey, (m) => {
         if (m.status && typeof m.progress === 'number') {
           progressEl.textContent = `${m.status} (${Math.round(m.progress * 100)}%): ${item.file.name}`;
         }

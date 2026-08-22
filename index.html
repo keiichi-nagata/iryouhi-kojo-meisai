@@ -115,16 +115,17 @@
 <div id="settingsModal" class="modal" hidden>
   <div class="modal-box">
     <h2>設定</h2>
-    <h3>Google Drive 連携</h3>
-    <p class="hint">領収書画像を自動でGoogle Driveの指定フォルダに保存します。事前にGoogle Cloud ConsoleでOAuthクライアントIDとAPIキーを発行してください（README参照）。</p>
-    <label>OAuth クライアントID
-      <input type="text" id="gcpClientId" placeholder="xxxxxxxx.apps.googleusercontent.com">
-    </label>
-    <label>APIキー
+    <h3>Google Cloud 連携</h3>
+    <p class="hint">領収書のOCR(文字認識)にはGoogle Cloud Vision APIを、Google Drive連携にはOAuth認証とGoogle Picker APIを使用します。事前にGoogle Cloud Consoleで発行してください（README参照）。</p>
+    <label>APIキー（OCR・フォルダ選択に使用）
       <input type="text" id="gcpApiKey" placeholder="AIza...">
+    </label>
+    <label>OAuth クライアントID（Drive連携に使用・任意）
+      <input type="text" id="gcpClientId" placeholder="xxxxxxxx.apps.googleusercontent.com">
     </label>
     <button id="saveCredsBtn" class="btn btn-primary" type="button">認証情報を保存</button>
     <hr>
+    <h3>Google Drive 連携（任意）</h3>
     <div class="folder-row">
       <button id="pickFolderBtn" class="btn" type="button">保存先フォルダを選択</button>
       <span id="folderNameLabel">未選択</span>
@@ -141,7 +142,6 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://apis.google.com/js/api.js" async defer></script>
 <script src="js/db.js"></script>
