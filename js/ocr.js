@@ -97,7 +97,9 @@ function extractDate(text) {
 }
 
 function numbersInLine(line) {
-  return [...line.matchAll(/[¥￥]?\s*([0-9][0-9,]{2,})\s*円?/g)]
+  // 診療報酬の「点数」(例: 1086点)は金額(円)ではないため、数字の直後に
+  // 「点」が続く場合は候補から除外する。
+  return [...line.matchAll(/[¥￥]?\s*([0-9][0-9,]{2,})(?!\s*点)\s*円?/g)]
     .map((x) => parseInt(x[1].replace(/,/g, ''), 10));
 }
 
@@ -107,7 +109,7 @@ function numbersInLine(line) {
 // OCRでは項目名と数値が別の行に分かれて認識されることが多いため、キーワードの
 // 行だけでなく次の行も合わせて探索する。
 const AMOUNT_KEYWORD_TIERS = [
-  /(領収金額|負担額|自己負担|お支払|お会計)/,
+  /(領収金額|領収額|負担額|自己負担|お支払|お会計)/,
   /(請求金額|ご請求)/,
   /(合計|総合計|小計)/,
 ];
