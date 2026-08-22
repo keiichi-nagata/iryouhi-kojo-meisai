@@ -185,17 +185,13 @@ function extractAmount(text) {
     if (candidates.length) return Math.max(...candidates);
   }
 
-  // 電話番号(TEL 06-6626-3745 等)の一部を金額と誤認識しないよう、
-  // 電話番号らしき行・ハイフン区切りの数字列は候補から除外する。
-  const textWithoutPhoneNumbers = text
-    .split(/\r?\n/)
-    .filter((line) => !/TEL|電話/i.test(line))
-    .join('\n')
-    .replace(/\d{1,4}-\d{2,4}-\d{4}/g, '');
-  const allNums = [...textWithoutPhoneNumbers.matchAll(/([0-9][0-9,]{2,})/g)]
-    .map((x) => parseInt(x[1].replace(/,/g, ''), 10))
+  // キーワード行が見つからない場合、文中の適当な数字列(患者番号・電話番号・
+  // 保険者番号等)を金額と誤認識するリスクが非常に高いため、無条件のフォール
+  // バックは行わない。「¥」「円」など通貨記号が伴う数字に限り最終候補とする。
+  const currencyMarked = [...text.matchAll(/[¥￥]\s*([0-9][0-9,]{2,})|([0-9][0-9,]{2,})\s*円/g)]
+    .map((x) => parseInt((x[1] || x[2]).replace(/,/g, ''), 10))
     .filter((n) => n >= 100 && n <= 2000000);
-  if (allNums.length) return Math.max(...allNums);
+  if (currencyMarked.length) return Math.max(...currencyMarked);
   return '';
 }
 
