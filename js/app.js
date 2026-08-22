@@ -235,7 +235,7 @@
       });
       const parsed = OCR.parseReceiptText(text);
       openEditForm({
-        patientName: '',
+        patientName: parsed.patientName,
         facility: parsed.facility,
         category: parsed.category,
         amount: parsed.amount,

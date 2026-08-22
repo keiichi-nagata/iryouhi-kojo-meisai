@@ -208,6 +208,39 @@ function extractFacility(text) {
   return lines[0] || '';
 }
 
+// 「氏名」欄のラベルの後ろ数行から患者名らしき文字列を探す。
+// 領収証は「患者番号／氏名」のような見出し行の下に「2288／ナガタハヤト／永田隼都　様」
+// のように番号・ふりがな・漢字氏名が並ぶことが多いため、数字のみの行(患者番号)は除外し、
+// カタカナのふりがなより漢字を含む候補を優先する。
+function extractPatientName(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const labelRe = /氏\s*名/;
+  const labelIdx = lines.findIndex((l) => labelRe.test(l));
+  if (labelIdx === -1) return '';
+
+  const candidates = [];
+  for (let i = labelIdx; i < Math.min(labelIdx + 5, lines.length); i++) {
+    // ラベル行自体は「患者番号 氏名」のように別の見出しと同居していることがあるため、
+    // ラベルより前の部分は無視し、ラベルより後ろの部分だけを候補にする。
+    let raw = lines[i];
+    if (i === labelIdx) {
+      const m = raw.match(labelRe);
+      raw = m ? raw.slice(m.index + m[0].length) : '';
+    }
+    // 患者番号と氏名が同一行に詰めて認識される場合があるため、先頭の数字列は除去する。
+    const stripped = raw.replace(/\s+/g, '').replace(/^[0-9]+/, '');
+    if (!stripped) continue;
+    if (/番号/.test(stripped)) continue; // 「患者番号」等の見出しの誤爆を除外
+    const nameOnly = stripped.replace(/様$/, '');
+    if (nameOnly.length < 2 || nameOnly.length > 12) continue;
+    if (!/[぀-ヿ一-鿿]/.test(nameOnly)) continue;
+    candidates.push(nameOnly);
+  }
+  if (!candidates.length) return '';
+  const kanjiCandidate = candidates.find((c) => /[一-鿿]/.test(c));
+  return kanjiCandidate || candidates[0];
+}
+
 function guessCategory(facility) {
   const compact = (facility || '').replace(/\s+/g, '');
   if (/薬局/.test(compact)) return { shinryo: false, iyaku: true, kaigo: false, sonota: false };
@@ -221,6 +254,7 @@ function guessCategory(facility) {
 function parseReceiptText(text) {
   const facility = extractFacility(text);
   return {
+    patientName: extractPatientName(text),
     facility,
     amount: extractAmount(text),
     date: extractDate(text),
