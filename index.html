@@ -53,7 +53,10 @@
           </select>
         </label>
         <label>病院・薬局などの名称
-          <input type="text" id="fFacility" list="facilityNames" required maxlength="20">
+          <select id="fFacilitySelect">
+            <option value="">▼ 登録済みから選択</option>
+          </select>
+          <input type="text" id="fFacility" list="facilityNames" required maxlength="20" placeholder="登録がなければ直接入力してください">
           <datalist id="facilityNames"></datalist>
         </label>
         <fieldset class="category-group">

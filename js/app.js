@@ -250,6 +250,20 @@
     });
   }
 
+  // datalistはiOS Safari等で挙動が不安定なため、確実に選べる<select>も併設する。
+  // 選んだら即テキスト欄に反映し、プルダウン自体は「▼ 登録済みから選択」に戻す
+  // （テキスト欄がその後も自由入力できる状態を保つため）。
+  function renderFacilitySelect() {
+    const sel = $('fFacilitySelect');
+    sel.innerHTML = '<option value="">▼ 登録済みから選択</option>';
+    facilityRegistry.forEach((n) => {
+      const opt = document.createElement('option');
+      opt.value = n;
+      opt.textContent = n;
+      sel.appendChild(opt);
+    });
+  }
+
   function renderRegistryList(listEl, registry, onDelete) {
     listEl.innerHTML = '';
     registry.forEach((name) => {
@@ -281,6 +295,7 @@
       await AppDB.kvSet('facilityRegistry', facilityRegistry);
       renderFacilityRegistryUI();
       renderFacilityDatalist();
+      renderFacilitySelect();
     });
   }
 
@@ -442,6 +457,11 @@
     openEditForm({ patientName: '', facility: '', category: {}, amount: '', reimbursed: '', date: '' });
   });
 
+  $('fFacilitySelect').addEventListener('change', (ev) => {
+    if (ev.target.value) $('fFacility').value = ev.target.value;
+    ev.target.value = ''; // 選択は反映用のワンショット操作なのでプレースホルダーに戻す
+  });
+
   $('cameraInput').addEventListener('change', (ev) => { handleFiles(ev.target.files); ev.target.value = ''; });
   $('galleryInput').addEventListener('change', (ev) => { handleFiles(ev.target.files); ev.target.value = ''; });
 
@@ -527,6 +547,7 @@
     await addRegistryEntry($('newFacilityRegistryInput'), facilityRegistry, 'facilityRegistry', () => {
       renderFacilityRegistryUI();
       renderFacilityDatalist();
+      renderFacilitySelect();
     });
   });
 
@@ -540,6 +561,7 @@
     await loadRegistries();
     renderPatientSelect('');
     renderFacilityDatalist();
+    renderFacilitySelect();
     await renderYearSelect();
     await switchYear(currentYear);
   })();
