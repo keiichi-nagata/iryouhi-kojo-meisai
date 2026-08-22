@@ -134,6 +134,7 @@
     <div class="folder-row">
       <button id="pickFolderBtn" class="btn" type="button">保存先フォルダを選択</button>
       <span id="folderNameLabel">未選択</span>
+      <a id="openFolderLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener" hidden>📂 Driveでフォルダを開く</a>
     </div>
     <label class="checkbox-row">
       <input type="checkbox" id="autoUploadToggle"> 登録時に領収書画像を自動でDriveへアップロードする
@@ -142,7 +143,7 @@
     <h3>医療を受けた人（登録リスト）</h3>
     <p class="hint">ここで登録した人が「医療を受けた人」のプルダウンに表示されます。OCRで読み取った氏名に近い人が自動選択されます。</p>
     <div class="registry-add-row">
-      <input type="text" id="newPatientRegistryInput" placeholder="例: 永田隼都" maxlength="10">
+      <input type="text" id="newPatientRegistryInput" placeholder="例: 山田太郎" maxlength="10">
       <button id="addPatientRegistryBtn" class="btn" type="button">追加</button>
     </div>
     <ul id="patientRegistryList" class="registry-list"></ul>

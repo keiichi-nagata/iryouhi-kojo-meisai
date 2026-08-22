@@ -500,12 +500,23 @@
   });
 
   // ---------- 設定モーダル ----------
+  function updateOpenFolderLink(folderId) {
+    const link = $('openFolderLink');
+    if (folderId) {
+      link.href = `https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}`;
+      link.hidden = false;
+    } else {
+      link.hidden = true;
+    }
+  }
+
   $('settingsBtn').addEventListener('click', () => {
     const s = DriveApp.getSettings();
     $('gcpClientId').value = s.clientId;
     $('gcpApiKey').value = s.apiKey;
     $('folderNameLabel').textContent = s.folderName || '未選択';
     $('autoUploadToggle').checked = s.autoUpload;
+    updateOpenFolderLink(s.folderId);
     renderPatientRegistryUI();
     renderFacilityRegistryUI();
     $('settingsModal').hidden = false;
@@ -518,7 +529,10 @@
   $('pickFolderBtn').addEventListener('click', async () => {
     try {
       const folder = await DriveApp.pickFolder();
-      if (folder) $('folderNameLabel').textContent = folder.name;
+      if (folder) {
+        $('folderNameLabel').textContent = folder.name;
+        updateOpenFolderLink(folder.id);
+      }
     } catch (e) {
       toast('フォルダ選択に失敗しました: ' + e.message, true);
     }
