@@ -38,17 +38,29 @@ Drive連携をオンにしておくと領収書画像自体はDriveにバック�
 2. 「APIとサービス」→「ライブラリ」から以下を有効化する
    - **Cloud Vision API**
    - （Drive連携も使う場合）**Google Drive API**、**Google Picker API**
-3. 「APIとサービス」→「認証情報」→「認証情報を作成」→ **APIキー**
+3. [お支払い](https://console.cloud.google.com/billing) で請求先アカウントを作成し
+   （クレジットカード等の登録が必要）、対象プロジェクトにリンクする
+   - Cloud Vision APIは無料枠内であっても請求先アカウントの紐付けが必須です
+     （Googleの不正利用防止のための仕組みで、無料枠を超えなければ実際の請求は
+     発生しません）
+   - 未設定のままOCRを実行すると
+     `This API method requires billing to be enabled` というエラーになります
+4. 「APIとサービス」→「認証情報」→「認証情報を作成」→ **APIキー**
    - 作成後、「アプリケーションの制限」で「ウェブサイト」を選び、公開した
      GitHub PagesのURL（例: `https://<user>.github.io/*`）を追加しておくことを推奨します
    - 「APIの制限」で Cloud Vision API（Drive連携も使うなら Google Picker API も）を
      許可しておくとより安全です
-4. アプリの ⚙設定 画面を開き、発行したAPIキーを入力して保存
+5. アプリの ⚙設定 画面を開き、発行したAPIキーを入力して保存
 
 Vision APIには毎月無料枠があり、家庭で使う程度の領収書枚数であれば
 通常は無料枠内に収まります（詳細は
 [Cloud Vision の料金ページ](https://cloud.google.com/vision/pricing)を参照）。
 領収書画像はOCRのためにGoogleのサーバーへ送信される点はご留意ください。
+
+想定外の課金を避けたい場合は、[予算とアラート](https://console.cloud.google.com/billing/budgets)
+から少額（例: 100円）の予算アラートを設定しておくと、無料枠を超える利用が
+あった場合にメールで通知を受け取れます（アラートは通知のみで、自動的に
+利用を止めるものではない点に注意してください）。
 
 APIキーはブラウザのlocalStorageに保存されるのみで、リポジトリには一切含まれません。
 
