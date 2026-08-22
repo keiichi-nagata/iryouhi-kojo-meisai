@@ -7,7 +7,7 @@
 ## できること
 
 - 📷 スマホのカメラで領収書を撮影 / 画像をまとめて選択してアップロード
-- 🔍 Tesseract.js（ブラウザ内OCR）で領収書から金額・日付・医療機関名を自動抽出し、
+- 🔍 Google Cloud Vision APIで領収書から金額・日付・医療機関名・患者名を自動抽出し、
   確認・修正してから登録（OCR結果は下書きなので必ず目視確認してください）
 - 📊 登録するたびに `iryouhi_form_v3.1.xlsx` にリアルタイムで反映（画像・ロゴ・
   シート保護・入力規則などは一切崩さず、値だけを書き込みます）
@@ -27,16 +27,37 @@ Drive連携をオンにしておくと領収書画像自体はDriveにバック�
    ブランチを `main` / フォルダを `/(root)` に設定する
 3. 発行されたURL（例: `https://<user>.github.io/<repo>/`）でアプリにアクセスできる
 
-## Google Drive連携のセットアップ（任意）
+## Google Cloudのセットアップ（OCR利用に必須）
 
-領収書画像の自動アップロードを使わない場合はこの手順は不要です（OCR→Excel
-追記・ダウンロードだけなら設定不要ですぐ使えます）。
+領収書のOCR（文字認識）にはGoogle Cloud Vision APIを使用します。以下の
+手順でAPIキーを発行し、アプリの ⚙設定 画面に入力してください。これを
+行わないと領収書からの自動読み取りは動作しません（テンプレートへの
+手入力・ダウンロード自体はAPIキーなしでも利用できます）。
 
 1. [Google Cloud Console](https://console.cloud.google.com/) で新しいプロジェクトを作成する
-2. 「APIとサービス」→「有効なAPIとサービス」から以下を有効化する
-   - **Google Drive API**
-   - **Google Picker API**
-3. 左メニュー「Google Auth Platform」（旧: OAuth同意画面）を開き、未設定なら
+2. 「APIとサービス」→「ライブラリ」から以下を有効化する
+   - **Cloud Vision API**
+   - （Drive連携も使う場合）**Google Drive API**、**Google Picker API**
+3. 「APIとサービス」→「認証情報」→「認証情報を作成」→ **APIキー**
+   - 作成後、「アプリケーションの制限」で「ウェブサイト」を選び、公開した
+     GitHub PagesのURL（例: `https://<user>.github.io/*`）を追加しておくことを推奨します
+   - 「APIの制限」で Cloud Vision API（Drive連携も使うなら Google Picker API も）を
+     許可しておくとより安全です
+4. アプリの ⚙設定 画面を開き、発行したAPIキーを入力して保存
+
+Vision APIには毎月無料枠があり、家庭で使う程度の領収書枚数であれば
+通常は無料枠内に収まります（詳細は
+[Cloud Vision の料金ページ](https://cloud.google.com/vision/pricing)を参照）。
+領収書画像はOCRのためにGoogleのサーバーへ送信される点はご留意ください。
+
+APIキーはブラウザのlocalStorageに保存されるのみで、リポジトリには一切含まれません。
+
+## Google Drive連携のセットアップ（任意）
+
+領収書画像の自動アップロードを使わない場合はこの手順は不要です。
+
+1. 上記の手順2で **Google Drive API** と **Google Picker API** も有効化しておく
+2. 左メニュー「Google Auth Platform」（旧: OAuth同意画面）を開き、未設定なら
    「開始」から設定ウィザードを進める
    - アプリ情報: アプリ名、ユーザーサポートメール（自分のGoogleアカウント）
    - 対象: 個人利用なら「外部」を選択（審査不要の「テスト」ステータスのままでOK）
@@ -44,7 +65,7 @@ Drive連携をオンにしておくと領収書画像自体はDriveにバック�
    - ウィザード完了後、左メニュー「対象」を開き、
      「テストユーザー」に自分のGoogleアカウントを追加し、
      スコープに `drive.file`（本アプリが作成/選択したファイルのみアクセス）を追加する
-4. 左メニュー「Google Auth Platform」→「クライアント」→「クライアントを作成」→
+3. 左メニュー「Google Auth Platform」→「クライアント」→「クライアントを作成」→
    **OAuthクライアントID**
    - アプリケーションの種類: ウェブアプリケーション
    - 「承認済みのJavaScript生成元」に公開したGitHub PagesのURL
@@ -52,19 +73,13 @@ Drive連携をオンにしておくと領収書画像自体はDriveにバック�
    - 「承認済みのリダイレクトURI」は不要（空欄のままでOK）。本アプリは
      ポップアップ方式のトークンクライアントを使うため、リダイレクトURIは使用しません
    - 発行された「クライアントID」を控える
-5. 「APIとサービス」→「認証情報」→「認証情報を作成」→ **APIキー**
-   - 作成後、「アプリケーションの制限」でHTTPリファラーを設定し、GitHub Pages
-     のURLに制限しておくことを推奨します
-   - 「APIの制限」で Google Picker API のみ許可しておくとより安全です
-6. アプリの ⚙設定 画面を開き、クライアントIDとAPIキーを入力して保存
-7. 「保存先フォルダを選択」からGoogle Drive上の保存先フォルダを選ぶ
-8. 「登録時に領収書画像を自動でDriveへアップロードする」をオンにする
+4. アプリの ⚙設定 画面を開き、クライアントIDを入力して保存
+   （APIキーは上記のGoogle Cloudセットアップで入力済みのものを共用します）
+5. 「保存先フォルダを選択」からGoogle Drive上の保存先フォルダを選ぶ
+6. 「登録時に領収書画像を自動でDriveへアップロードする」をオンにする
 
 以降、明細を登録するたびに選択したフォルダの `<年度>` サブフォルダへ領収書画像が
 アップロードされます。
-
-認証情報（クライアントID・APIキー）はブラウザのlocalStorageに保存されるのみで、
-リポジトリには一切含まれません。
 
 ## テンプレートのバージョンアップ対応
 
@@ -83,7 +98,7 @@ Drive連携をオンにしておくと領収書画像自体はDriveにバック�
 
 - 静的HTML/CSS/JSのみ（ビルド不要）。CDN経由で以下を読み込みます
   - [JSZip](https://stuk.github.io/jszip/) — xlsxの直接書き換え
-  - [Tesseract.js](https://github.com/naptha/tesseract.js) — ブラウザ内OCR
+  - Google Cloud Vision API — 領収書のOCR（`fetch`で直接呼び出し）
   - Google Identity Services / Google API Client — Drive連携
 - xlsxは `xl/worksheets/sheet1.xml` の該当セルのみを部分的に書き換える方式のため、
   ロゴ画像・スタイル・入力規則・シート保護など元のフォーマットを完全に保持します
