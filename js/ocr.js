@@ -175,21 +175,37 @@ const LEGAL_ENTITY_PREFIX_RE = /^((地方)?独立行政法人|医療法人(社�
 
 function extractFacility(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const keyRe = /(病院|医院|クリニック|薬局|歯科|接骨院|整骨院|診療所|医療センター)/;
+  // 「〇〇眼科」「〇〇皮膚科」のように診療科名がそのままクリニック名に
+  // なっている個人医院が多いため、代表的な診療科名も候補キーワードに含める。
+  const keyRe = /(病院|医院|クリニック|薬局|歯科|接骨院|整骨院|診療所|医療センター|眼科|耳鼻咽喉科|耳鼻科|皮膚科|泌尿器科|産婦人科|婦人科|整形外科|心療内科|脳神経外科|放射線科|循環器科|呼吸器科|消化器科|小児科)/;
   const isCandidate = (line) => keyRe.test(line.replace(/\s+/g, ''));
   const isPreferred = (line) => isCandidate(line) && !LEGAL_ENTITY_PREFIX_RE.test(line.replace(/\s+/g, ''));
 
   // 診療報酬明細表には「歯科矯正」「歯冠修復・欠損補綴」のような、医療機関
   // 名と同じキーワード(歯科等)を含む項目名がずらりと並ぶことが多く、単純な
   // キーワード一致だとそちらを誤って拾ってしまう。医療機関名は郵便番号(〒)
-  // や電話番号(TEL)の記載箇所の近く(レターヘッド・発行元情報欄)にあること
-  // が多いため、まずそちらの近辺だけを優先的に探す。
-  const anchorIdx = lines.findIndex((l) => /〒|TEL|電話/i.test(l));
+  // や電話番号(TEL)、住所の記載箇所の近く(レターヘッド・発行元情報欄)に
+  // あることが多いため、まずそちらの近辺だけを優先的に探す。電話番号や
+  // 住所には「TEL」等のラベルが付かず数字・地名だけのことも多い。
+  const anchorIdx = lines.findIndex((l) => (
+    /〒|TEL|電話/i.test(l)
+    || /\d{2,4}-\d{3,4}-\d{4}/.test(l)
+    || (/[市区町村]/.test(l) && /\d/.test(l))
+  ));
   if (anchorIdx !== -1) {
     const windowStart = Math.max(0, anchorIdx - 3);
     const windowEnd = Math.min(lines.length, anchorIdx + 4);
+    const windowCandidates = [];
     for (let i = windowStart; i < windowEnd; i++) {
-      if (isPreferred(lines[i])) return cleanJapaneseSpacing(lines[i]);
+      if (isCandidate(lines[i])) windowCandidates.push(lines[i]);
+    }
+    if (windowCandidates.length) {
+      // この近辺に候補が複数あれば法人格接頭辞のない方を優先するが、
+      // 「医療法人 杉本眼科」のように医院自体の名称に法人格が直接
+      // 付いていて他に候補がない場合は、離れた場所(領収印の誤読等)を
+      // 探しに行かず、この近辺の候補をそのまま採用する。
+      const preferred = windowCandidates.find((line) => !LEGAL_ENTITY_PREFIX_RE.test(line.replace(/\s+/g, '')));
+      return cleanJapaneseSpacing(preferred || windowCandidates[0]);
     }
   }
 
@@ -221,7 +237,9 @@ function extractPatientName(text) {
   if (labelIdx === -1) return '';
 
   const candidates = [];
-  for (let i = labelIdx; i < Math.min(labelIdx + 5, lines.length); i++) {
+  // ラベルと値の間に、患者番号・書類番号・請求期間・ふりがな等、複数行の
+  // 見出しやノイズが挟まる帳票があるため、探索範囲は広めに取る。
+  for (let i = labelIdx; i < Math.min(labelIdx + 12, lines.length); i++) {
     // ラベル行自体は「患者番号 氏名」のように別の見出しと同居していることがあるため、
     // ラベルより前の部分は無視し、ラベルより後ろの部分だけを候補にする。
     let raw = lines[i];
