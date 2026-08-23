@@ -103,6 +103,14 @@ function extractDate(text) {
   if (m) {
     return `${m[1]}/${String(m[2]).padStart(2, '0')}/${String(m[3]).padStart(2, '0')}`;
   }
+  // 元号の表記自体がOCRで欠落し「8 年 6 月 29 日」のように年数字だけが
+  // 残ることがある。本アプリは現在発行される領収書のみを扱うため、
+  // 1〜2桁の年に限り令和とみなす（西暦4桁のケースは上のパターンで処理済み）。
+  m = text.match(/(?<![年0-9])(\d{1,2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+  if (m) {
+    const year = ERA_START['令和'] + parseInt(m[1], 10);
+    return `${year}/${String(m[2]).padStart(2, '0')}/${String(m[3]).padStart(2, '0')}`;
+  }
   return '';
 }
 
@@ -200,11 +208,16 @@ function extractFacility(text) {
 function extractPatientName(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const labelRe = /氏\s*名/;
-  // 「氏名」のうち「氏」がOCRで欠落し「名」だけの単独行として認識される
-  // ことがあるため、その場合もラベル行とみなす。
-  const looseLabelRe = /^名$/;
+  // 帳票のレイアウトによっては「氏」と「名」が別々の単独行に分かれて
+  // OCR認識され、しかもその間に肝心の氏名の値が挟まる
+  // （例:「氏」→「永田隼都」→「名」の順）ことがある。この場合、
+  // 「名」を起点に後方を探しても値を素通りしてしまうため、「氏」の
+  // 単独行が見つかればそちらを優先的な起点にする。
+  const looseLabelPatientRe = /^氏$/;
+  const looseLabelNameRe = /^名$/;
   let labelIdx = lines.findIndex((l) => labelRe.test(l));
-  if (labelIdx === -1) labelIdx = lines.findIndex((l) => looseLabelRe.test(l));
+  if (labelIdx === -1) labelIdx = lines.findIndex((l) => looseLabelPatientRe.test(l));
+  if (labelIdx === -1) labelIdx = lines.findIndex((l) => looseLabelNameRe.test(l));
   if (labelIdx === -1) return '';
 
   const candidates = [];
