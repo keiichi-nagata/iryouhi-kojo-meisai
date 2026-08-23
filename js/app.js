@@ -353,9 +353,10 @@
       // 「医療を受けた人」は登録リストからのプルダウン選択に一本化するため、
       // OCR結果は登録済みの名前と近ければ自動選択し、なければ未選択のままにする。
       const matchedPatient = findBestMatch(parsed.patientName, patientRegistry) || '';
-      // 「病院・薬局などの名称」も登録リストと近ければその正式名称を採用し、
-      // 一致しない場合は生のOCR結果ではなく空欄にして手入力を促す。
-      const matchedFacility = findBestMatch(parsed.facility, facilityRegistry) || '';
+      // 「病院・薬局などの名称」は登録リストと近ければその正式名称を採用し、
+      // 一致しない場合はOCRの読み取り結果を仮入力する（登録すれば次回以降は
+      // 自動選択されるようになる）。
+      const matchedFacility = findBestMatch(parsed.facility, facilityRegistry) || parsed.facility || '';
       const category = matchedFacility ? OCR.guessCategory(matchedFacility) : parsed.category;
       openEditForm({
         patientName: matchedPatient,
