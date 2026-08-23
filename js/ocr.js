@@ -173,11 +173,15 @@ function cleanJapaneseSpacing(str) {
 // 行より、そうでない行を優先する。
 const LEGAL_ENTITY_PREFIX_RE = /^((地方)?独立行政法人|医療法人(社団|財団)?|社会福祉法人|学校法人|(一般|公益)?社団法人|(一般|公益)?財団法人)/;
 
+// 「〇〇眼科」「〇〇皮膚科」のように診療科名がそのままクリニック名になって
+// いる個人医院が多いため、代表的な診療科名も候補キーワードに含める。
+// extractFacility(名称抽出)とguessCategory(区分判定)の両方で使うため
+// 一箇所にまとめ、キーワードの追加漏れ・食い違いを防ぐ。
+const SHINRYO_FACILITY_RE = /(病院|医院|クリニック|歯科|接骨院|整骨院|診療所|医療センター|眼科|耳鼻咽喉科|耳鼻科|皮膚科|泌尿器科|産婦人科|婦人科|整形外科|心療内科|脳神経外科|放射線科|循環器科|呼吸器科|消化器科|小児科)/;
+
 function extractFacility(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  // 「〇〇眼科」「〇〇皮膚科」のように診療科名がそのままクリニック名に
-  // なっている個人医院が多いため、代表的な診療科名も候補キーワードに含める。
-  const keyRe = /(病院|医院|クリニック|薬局|歯科|接骨院|整骨院|診療所|医療センター|眼科|耳鼻咽喉科|耳鼻科|皮膚科|泌尿器科|産婦人科|婦人科|整形外科|心療内科|脳神経外科|放射線科|循環器科|呼吸器科|消化器科|小児科)/;
+  const keyRe = new RegExp(`(薬局|${SHINRYO_FACILITY_RE.source})`);
   const isCandidate = (line) => keyRe.test(line.replace(/\s+/g, ''));
   const isPreferred = (line) => isCandidate(line) && !LEGAL_ENTITY_PREFIX_RE.test(line.replace(/\s+/g, ''));
 
@@ -269,7 +273,7 @@ function guessCategory(facility) {
   const compact = (facility || '').replace(/\s+/g, '');
   if (/薬局/.test(compact)) return { shinryo: false, iyaku: true, kaigo: false, sonota: false };
   if (/介護/.test(compact)) return { shinryo: false, iyaku: false, kaigo: true, sonota: false };
-  if (/(病院|医院|クリニック|歯科|接骨院|整骨院|診療所|医療センター)/.test(compact)) {
+  if (SHINRYO_FACILITY_RE.test(compact)) {
     return { shinryo: true, iyaku: false, kaigo: false, sonota: false };
   }
   return { shinryo: false, iyaku: false, kaigo: false, sonota: true };
