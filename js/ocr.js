@@ -79,6 +79,8 @@ async function recognizeImage(fileOrBlob, apiKey, onProgress) {
 
 const ERA_START = { '令和': 2018, '平成': 1988, '昭和': 1925 };
 
+const ERA_ALPHABET = { R: '令和', H: '平成', S: '昭和' };
+
 function extractDate(text) {
   // OCRは「令和」等の熟語の間にも余分な空白を挿入することがあるため、
   // 元号の文字間にも\s*を許容する。
@@ -87,6 +89,14 @@ function extractDate(text) {
     const era = m[1].replace(/\s+/g, '');
     const yNum = m[2] === '元' ? 1 : parseInt(m[2], 10);
     const year = ERA_START[era] + yNum;
+    return `${year}/${String(m[3]).padStart(2, '0')}/${String(m[4]).padStart(2, '0')}`;
+  }
+  // 病院等の帳票では「R8年7月6日」のように元号をアルファベット1文字
+  // (R=令和, H=平成, S=昭和)で略記することが多い。
+  m = text.match(/\b([RHS])\s*(\d{1,2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/i);
+  if (m) {
+    const era = ERA_ALPHABET[m[1].toUpperCase()];
+    const year = ERA_START[era] + parseInt(m[2], 10);
     return `${year}/${String(m[3]).padStart(2, '0')}/${String(m[4]).padStart(2, '0')}`;
   }
   m = text.match(/(20\d{2}|19\d{2})[\/\-年](\d{1,2})[\/\-月](\d{1,2})\s*日?/);
@@ -148,11 +158,20 @@ function cleanJapaneseSpacing(str) {
   return str.replace(/([぀-ヿ一-鿿])\s+(?=[぀-ヿ一-鿿])/g, '$1');
 }
 
+// 「地方独立行政法人〇〇病院機構」のような運営法人名が、実際に受診した
+// 施設名(例:「大阪母子医療センター」)とは別の行に出てくる帳票がある。
+// 運営法人の行にも「病院」等のキーワードが含まれ得るため、先に見つかった
+// 行を無条件に採用すると運営法人名を拾ってしまう。法人格の接頭辞で始まる
+// 行より、そうでない行を優先する。
+const LEGAL_ENTITY_PREFIX_RE = /^((地方)?独立行政法人|医療法人(社団|財団)?|社会福祉法人|学校法人|(一般|公益)?社団法人|(一般|公益)?財団法人)/;
+
 function extractFacility(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const keyRe = /(病院|医院|クリニック|薬局|歯科|接骨院|整骨院|診療所)/;
-  for (const line of lines) {
-    if (keyRe.test(line.replace(/\s+/g, ''))) return cleanJapaneseSpacing(line);
+  const keyRe = /(病院|医院|クリニック|薬局|歯科|接骨院|整骨院|診療所|医療センター)/;
+  const matches = lines.filter((line) => keyRe.test(line.replace(/\s+/g, '')));
+  if (matches.length) {
+    const preferred = matches.find((line) => !LEGAL_ENTITY_PREFIX_RE.test(line.replace(/\s+/g, '')));
+    return cleanJapaneseSpacing(preferred || matches[0]);
   }
   return lines[0] ? cleanJapaneseSpacing(lines[0]) : '';
 }
@@ -202,7 +221,7 @@ function guessCategory(facility) {
   const compact = (facility || '').replace(/\s+/g, '');
   if (/薬局/.test(compact)) return { shinryo: false, iyaku: true, kaigo: false, sonota: false };
   if (/介護/.test(compact)) return { shinryo: false, iyaku: false, kaigo: true, sonota: false };
-  if (/(病院|医院|クリニック|歯科|接骨院|整骨院|診療所)/.test(compact)) {
+  if (/(病院|医院|クリニック|歯科|接骨院|整骨院|診療所|医療センター)/.test(compact)) {
     return { shinryo: true, iyaku: false, kaigo: false, sonota: false };
   }
   return { shinryo: false, iyaku: false, kaigo: false, sonota: true };
