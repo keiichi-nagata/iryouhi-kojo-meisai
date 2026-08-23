@@ -168,7 +168,24 @@ const LEGAL_ENTITY_PREFIX_RE = /^((地方)?独立行政法人|医療法人(社�
 function extractFacility(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const keyRe = /(病院|医院|クリニック|薬局|歯科|接骨院|整骨院|診療所|医療センター)/;
-  const matches = lines.filter((line) => keyRe.test(line.replace(/\s+/g, '')));
+  const isCandidate = (line) => keyRe.test(line.replace(/\s+/g, ''));
+  const isPreferred = (line) => isCandidate(line) && !LEGAL_ENTITY_PREFIX_RE.test(line.replace(/\s+/g, ''));
+
+  // 診療報酬明細表には「歯科矯正」「歯冠修復・欠損補綴」のような、医療機関
+  // 名と同じキーワード(歯科等)を含む項目名がずらりと並ぶことが多く、単純な
+  // キーワード一致だとそちらを誤って拾ってしまう。医療機関名は郵便番号(〒)
+  // や電話番号(TEL)の記載箇所の近く(レターヘッド・発行元情報欄)にあること
+  // が多いため、まずそちらの近辺だけを優先的に探す。
+  const anchorIdx = lines.findIndex((l) => /〒|TEL|電話/i.test(l));
+  if (anchorIdx !== -1) {
+    const windowStart = Math.max(0, anchorIdx - 3);
+    const windowEnd = Math.min(lines.length, anchorIdx + 4);
+    for (let i = windowStart; i < windowEnd; i++) {
+      if (isPreferred(lines[i])) return cleanJapaneseSpacing(lines[i]);
+    }
+  }
+
+  const matches = lines.filter(isCandidate);
   if (matches.length) {
     const preferred = matches.find((line) => !LEGAL_ENTITY_PREFIX_RE.test(line.replace(/\s+/g, '')));
     return cleanJapaneseSpacing(preferred || matches[0]);
