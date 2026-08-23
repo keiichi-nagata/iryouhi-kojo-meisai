@@ -463,7 +463,7 @@
 
   $('cancelEditBtn').addEventListener('click', () => {
     closeEditForm();
-    if (ocrQueue.length) processNext();
+    if (ocrQueue.length) { processing = true; processNext(); } else { processing = false; renderQueue(); }
   });
 
   $('manualAddBtn').addEventListener('click', () => {
