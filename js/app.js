@@ -195,7 +195,19 @@
     return dp[a.length][b.length];
   }
 
-  function nameSimilarity(a, b) {
+  // OCR結果と手入力した登録名は、見た目は同じでも文字コードが異なる
+  // ことがある（全角/半角、長音記号「ー」がハイフン等の別の記号として
+  // 認識される等）。比較前に正規化して表記ゆれを吸収する。
+  function normalizeForMatch(str) {
+    return (str || '')
+      .normalize('NFKC')
+      .replace(/[-‐‑‒–—―ｰ]/g, 'ー')
+      .replace(/\s+/g, '');
+  }
+
+  function nameSimilarity(rawA, rawB) {
+    const a = normalizeForMatch(rawA);
+    const b = normalizeForMatch(rawB);
     if (!a || !b) return 0;
     if (a === b) return 1;
     if (a.includes(b) || b.includes(a)) {
